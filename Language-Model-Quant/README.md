@@ -56,6 +56,31 @@ Even when memory is lower, latency can be worse than FP16 if:
 
 So, memory reduction is usually reliable; speedup depends on environment.
 
+## Observed Results From Your Run
+
+From your `python int8_quant.py` run:
+
+| Metric | FP16 | INT8 (bitsandbytes) |
+|---|---:|---:|
+| Model size (`params+buffers`) | 2.88 GiB | 1.66 GiB |
+| CUDA allocated after load | 2.88 GiB | 1.67 GiB |
+| CUDA reserved after load | 2.93 GiB | 2.93 GiB |
+| Inference time | 1.59 s | 5.75 s |
+| Loss (sample text) | 5.03 | 5.59 |
+
+### Why these results look like this
+
+- **Memory dropped a lot (expected):** INT8 reduced model storage from ~2.88 GiB to ~1.66 GiB, which is the main benefit of 8-bit quantization.
+- **`allocated` dropped but `reserved` stayed high:** PyTorch caching allocator kept the reserved pool (`2.93 GiB`) even after FP16 cleanup. This is normal and helps avoid repeated allocations.
+- **INT8 slower than FP16 in this run:** on this hardware/software combo, bitsandbytes INT8 kernel path had higher runtime overhead than FP16 Tensor Core path for this generation setting.
+- **Extra cast warning indicates overhead:** `MatMul8bitLt` warning shows activations were cast from `bfloat16` to `float16` during quantized matmul, which adds work.
+- **Loss is slightly higher for INT8:** this is expected because quantization introduces approximation error, even when quality is usually still close.
+
+### Notes about warnings in your output
+
+- `The following generation flags are not valid ... ['temperature', 'top_p', 'top_k']` comes from model generation config defaults and can be ignored for deterministic (`do_sample=False`) decoding.
+- Unauthenticated Hugging Face warning only affects download rate limits, not model quality.
+
 ## References
 
 - Hugging Face Transformers + bitsandbytes quantization docs:  
