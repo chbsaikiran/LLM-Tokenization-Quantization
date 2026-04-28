@@ -286,3 +286,49 @@ After convergence you call `torch.quantization.convert(model)` and get a **real 
 ### TL;DR
 
 QAT = **“teach the model to live with rounded numbers”** by **pretending to quantize during training**; after that you **throw away the fake ops** and ship a **regular low-bit model** that now **just works better**.
+
+
+AWQ does **not** use an analytic formula like SmoothQuant.  
+Instead it **searches** for the per-channel scale vector `s` that **minimizes the quantization error of the *weights*** while **keeping the activations in FP16** (so no activation-error term is needed).  
+The search is cheap, layer-by-layer, **once on calibration data**, and the criterion is purely **weight reconstruction MSE**.
+
+---
+
+### AWQ scale-search algorithm (high-level)
+
+1. **Collect** a few hundred calibration samples → get input activations `X` (FP16).  
+2. **Estimate channel importance**  
+   `imp_j = mean(|X_{:,j}|)` across tokens → large `imp_j` ⇒ salient channel.  
+3. **Define candidate scales**  
+   `s_j = imp_j ^ α` with `α` in a small grid (e.g. `{0.5, 0.6, … 1.0}`).  
+   (Only **one scalar α per layer** is tuned, not a full vector.)  
+4. **Grid search**  
+   For each α  
+   - scale weights: `W' = diag(s) · W`  
+   - quantize / de-quantize `W'` to target bits (INT4 or INT8)  
+   - compute `MSE(W' - dequant(W'))`  
+   Pick the α with **lowest MSE**.  
+5. **Absorb** the chosen `s` into the **quantized weights** and store them; **discard `s`**.
+
+---
+
+### Key differences vs SmoothQuant
+
+| Aspect | AWQ | SmoothQuant |
+|--------|-----|-------------|
+| **Objective** | Minimize **weight reconstruction error** | Minimize **activation+weight error** |
+| **Formula** | **No closed form**; grid search over `α` in `s_j = imp_j^α` | **Closed-form**: `s_j = max(|X|)^α / max(|W|)^{1-α}` |
+| **Activation dtype at runtime** | **FP16** (activations **not** quantized) | **INT8** (activations **are** quantized) |
+| **Search space** | **1 scalar α per layer** (10–20 candidates) | **0 scalars** (analytic) |
+| **Calibration cost** | **Seconds** (lightweight) | **Milliseconds** (formula) |
+
+---
+
+### Intuition
+
+AWQ only needs the **relative importance** of channels to decide **which weights deserve more effective precision**; a single exponent `α` is enough to stretch them appropriately.  
+SmoothQuant needs an **exact balance** between shrinking outliers **and** keeping weights quantizable, hence the analytic two-term ratio.
+
+So:  
+**SmoothQuant → closed-form balance** for **INT8 activations + weights**.  
+**AWQ → tiny grid search** to protect **important weight columns** while **activations stay in FP16**.
