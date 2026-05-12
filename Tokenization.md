@@ -1,6 +1,6 @@
 Tokenization is the very first step in how an LLM (Large Language Model) understands text. It converts raw text into **tokens**—smaller units (words, subwords, or characters) that the model can process numerically.
 
----
+----
 
 # 🔹 What is Tokenization in LLMs?
 
